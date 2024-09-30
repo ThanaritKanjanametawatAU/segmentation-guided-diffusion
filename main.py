@@ -317,6 +317,7 @@ def main(
             print("resuming from model at training epoch {}".format(resume_epoch))
         elif "eval" in mode:
             print("loading saved model...")
+        print("Dir: " + os.path.join(config.output_dir))
         model = model.from_pretrained(os.path.join(config.output_dir, 'unet'), use_safetensors=True)
 
     model = nn.DataParallel(model)
