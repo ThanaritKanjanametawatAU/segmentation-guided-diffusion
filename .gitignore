@@ -8,6 +8,11 @@ venv
 pycache
 *.cpython*
 
+
+# Environment Variables
+.env*
+setup
+
 # Samples
 samples_many_*
 
