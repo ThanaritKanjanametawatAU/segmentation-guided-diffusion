@@ -1,2 +1,16 @@
+# Dataset
 Data/*
 Mask/*
+
+# Environment
+venv
+.ipynb_checkpoints
+pycache
+*.cpython*
+
+# Samples
+samples_many_*
+
+# Models
+*.safetensors
+*config.json
