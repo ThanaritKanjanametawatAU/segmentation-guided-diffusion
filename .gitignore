@@ -19,3 +19,7 @@ samples_many_*
 # Models
 *.safetensors
 *config.json
+
+# Runtime
+ddim-*
+runs
