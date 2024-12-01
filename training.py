@@ -16,7 +16,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 import diffusers
 
-from eval import evaluate, add_segmentations_to_noise, SegGuidedDDPMPipeline, SegGuidedDDIMPipeline
+from eval import evaluate, SegGuidedDDPMPipeline, SegGuidedDDIMPipeline, PCBDiffusionPipeline
 
 @dataclass
 class TrainingConfig:
@@ -58,22 +58,17 @@ class TrainingConfig:
 
 
 def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, eval_dataloader, lr_scheduler, device='cuda'):
-    # Prepare everything
-    # There is no specific order to remember, you just need to unpack the
-    # objects in the same order you gave them to the prepare method.
-
     global_step = 0
-
+    
     # logging
     run_name = '{}-{}-{}'.format(config.model_type.lower(), config.dataset, config.image_size)
     if config.segmentation_guided:
         run_name += "-segguided"
     writer = SummaryWriter(comment=run_name)
 
-    # for loading segs to condition on:
+    # For loading segs to condition on:
     eval_dataloader = iter(eval_dataloader)
 
-    # Now you train the model
     start_epoch = 0
     if config.resume_epoch is not None:
         start_epoch = config.resume_epoch
@@ -85,119 +80,64 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, eval
         model.train()
 
         for step, batch in enumerate(train_dataloader):
-            clean_images = batch['images']
-            clean_images = clean_images.to(device)
+            # Get both master and defect images
+            master_images = batch['master_images'].to(device)
+            defect_images = batch['defect_images'].to(device)
 
-            # Sample noise to add to the images
-            noise = torch.randn(clean_images.shape).to(clean_images.device)
-            bs = clean_images.shape[0]
+            # Create valid mask (where defect_images differ from master_images)
+            valid_mask = (defect_images != master_images).float()
 
-            # Sample a random timestep for each image
-            timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (bs,), device=clean_images.device).long()
+            # Sample noise and timesteps
+            noise = torch.randn(defect_images.shape).to(device)
+            bs = defect_images.shape[0]
+            timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (bs,), device=device).long()
 
-            # Add noise to the clean images according to the noise magnitude at each timestep
-            # (this is the forward diffusion process)
-            noisy_images = noise_scheduler.add_noise(clean_images, noise, timesteps)
+            # Add noise to the defect images
+            noisy_defects = noise_scheduler.add_noise(defect_images, noise, timesteps)
 
-            if config.segmentation_guided:
-                noisy_images = add_segmentations_to_noise(noisy_images, batch, config, device)
+            # Prepare model input by concatenating noisy defects with master images
+            model_input = torch.cat([noisy_defects, master_images], dim=1)
 
-            # Predict the noise residual
-            if config.class_conditional:
-                class_labels = torch.ones(noisy_images.size(0)).long().to(device)
-                # classifier-free guidance
-                a = np.random.uniform()
-                if a <= config.cfg_p_uncond:
-                    class_labels = torch.zeros_like(class_labels).long()
-                noise_pred = model(noisy_images, timesteps, class_labels=class_labels, return_dict=False)[0]
-            else:
-                noise_pred = model(noisy_images, timesteps, return_dict=False)[0]
-            loss = F.mse_loss(noise_pred, noise)
+            # Get model prediction
+            noise_pred = model(model_input, timesteps, return_dict=False)[0]
+
+            # Calculate loss with valid mask
+            loss = F.mse_loss(noise_pred * valid_mask, noise * valid_mask)
+
             loss.backward()
-
             nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
             lr_scheduler.step()
             optimizer.zero_grad()
 
-            # also train on target domain images if conditional
-            # (we don't have masks for this domain, so we can't do segmentation-guided; just use blank masks)
-            if config.class_conditional:
-                target_domain_images = batch['images_target']
-                target_domain_images = target_domain_images.to(device)
-
-                # Sample noise to add to the images
-                noise = torch.randn(target_domain_images.shape).to(target_domain_images.device)
-                bs = target_domain_images.shape[0]
-
-                # Sample a random timestep for each image
-                timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (bs,), device=target_domain_images.device).long()
-
-                # Add noise to the clean images according to the noise magnitude at each timestep
-                # (this is the forward diffusion process)
-                noisy_images = noise_scheduler.add_noise(target_domain_images, noise, timesteps)
-
-                if config.segmentation_guided:
-                    # no masks in target domain so just use blank masks
-                    noisy_images = torch.cat((noisy_images, torch.zeros_like(noisy_images)), dim=1)
-
-                # Predict the noise residual
-                class_labels = torch.full([noisy_images.size(0)], 2).long().to(device)
-                # classifier-free guidance
-                a = np.random.uniform()
-                if a <= config.cfg_p_uncond:
-                    class_labels = torch.zeros_like(class_labels).long()
-                noise_pred = model(noisy_images, timesteps, class_labels=class_labels, return_dict=False)[0]
-                loss_target_domain = F.mse_loss(noise_pred, noise)
-                loss_target_domain.backward()
-
-                nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                optimizer.step()
-                lr_scheduler.step()
-                optimizer.zero_grad()
-
             progress_bar.update(1)
-            if config.class_conditional:
-                logs = {"loss": loss.detach().item(), "loss_target_domain": loss_target_domain.detach().item(), 
-                        "lr": lr_scheduler.get_last_lr()[0], "step": global_step}
-                writer.add_scalar("loss_target_domain", loss.detach().item(), global_step)
-            else: 
-                logs = {"loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0], "step": global_step}
+            logs = {"loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0], "step": global_step}
             writer.add_scalar("loss", loss.detach().item(), global_step)
-
+            
             progress_bar.set_postfix(**logs)
             global_step += 1
 
-        # After each epoch you optionally sample some demo images with evaluate() and save the model
-        if config.model_type == "DDPM":
-            if config.segmentation_guided:
-                pipeline = SegGuidedDDPMPipeline(
-                    unet=model.module, scheduler=noise_scheduler, eval_dataloader=eval_dataloader, external_config=config
-                    )
-            else:
-                if config.class_conditional:
-                    raise NotImplementedError("TODO: Conditional training not implemented for non-seg-guided DDPM")
-                else:
-                    pipeline = diffusers.DDPMPipeline(unet=model.module, scheduler=noise_scheduler)
-        elif config.model_type == "DDIM":
-            if config.segmentation_guided:
-                pipeline = SegGuidedDDIMPipeline(
-                    unet=model.module, scheduler=noise_scheduler, eval_dataloader=eval_dataloader, external_config=config
-                    )
-            else:
-                if config.class_conditional:
-                    raise NotImplementedError("TODO: Conditional training not implemented for non-seg-guided DDIM")
-                else:
-                    pipeline = diffusers.DDIMPipeline(unet=model.module, scheduler=noise_scheduler)
+        # After each epoch you optionally sample some demo images and save the model
+        if epoch == 0 or (epoch + 1) % config.save_image_epochs == 0 or epoch == config.num_epochs - 1:
+            if config.model_type == "DDPM":
+                pipeline = PCBDiffusionPipeline(
+                    unet=model.module, 
+                    scheduler=noise_scheduler,
+                    external_config=config
+                )
+            elif config.model_type == "DDIM":
+                pipeline = PCBDiffusionPipeline(
+                    unet=model.module,
+                    scheduler=noise_scheduler,
+                    external_config=config
+                )
 
-        model.eval()
+            # Get some master images for conditioning
+            eval_batch = next(eval_dataloader)
+            master_images_eval = eval_batch['master_images'].to(device)
 
-        if (epoch + 1) % config.save_image_epochs == 0 or epoch == config.num_epochs - 1:
-            if config.segmentation_guided:
-                seg_batch = next(eval_dataloader)
-                evaluate(config, epoch, pipeline, seg_batch)
-            else:
-                evaluate(config, epoch, pipeline)
+            # Generate samples
+            evaluate(config, epoch, pipeline, master_images_eval)
 
-        if (epoch + 1) % config.save_model_epochs == 0 or epoch == config.num_epochs - 1:
+        if (epoch + 1) % config.save_model_epochs == 0:
             pipeline.save_pretrained(config.output_dir)

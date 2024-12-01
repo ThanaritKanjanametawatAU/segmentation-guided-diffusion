@@ -12,6 +12,8 @@ import numpy as np
 import diffusers
 from diffusers.optimization import get_cosine_schedule_with_warmup
 import datasets
+from datasets import load_dataset
+
 
 # custom imports
 from training import TrainingConfig, train_loop
@@ -40,9 +42,15 @@ def main(
     eval_blank_mask=False,
     eval_sample_size=1000
 ):
+    
+
+
     #GPUs
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print('running on {}'.format(device))
+
+
+
 
     # load config
     output_dir = '{}-{}-{}'.format(model_type.lower(), dataset, img_size)  # the model namy locally and on the HF Hub
@@ -57,7 +65,13 @@ def main(
 
     if mode == "train":
         evalset_name = "val"
-        assert img_dir is not None, "must provide image directory for training"
+        # Modify this check to allow HF datasets
+        if dataset.startswith("Thanarit/") or dataset.startswith("huggingface/"):
+            # Using Hugging Face dataset
+            pass
+        else:
+            # Using local directory
+            assert img_dir is not None, "must provide image directory for training when not using Hugging Face dataset"
     elif "eval" in mode:
         evalset_name = "test"
 
@@ -243,40 +257,71 @@ def main(
 
     else:
         if img_dir is not None:
-            def transform(examples):
-                if not load_images_as_np_arrays:
-                    images = [preprocess(image.convert(PIL_image_type)) for image in examples["image"]]
-                else:
-                    images = [
-                        preprocess(F.interpolate(torch.tensor(np.load(image)).unsqueeze(0).float(), size=(config.image_size, config.image_size)).squeeze()) for image in examples["image"]
-                        ]
-                images_filenames = examples["image_filename"]
-                #return {"images": images, "image_filenames": images_filenames}
-                return {"images": images, **{"image_filenames": images_filenames}}
-        
-            dataset_train.set_transform(transform)
-            dataset_eval.set_transform(transform)
+            pass
 
-    if ((img_dir is None) and (not segmentation_guided)):
-        train_dataloader = None
-        # just make placeholder dataloaders to iterate through when sampling from uncond model
-        eval_dataloader = torch.utils.data.DataLoader(
-            torch.utils.data.TensorDataset(torch.zeros(config.eval_batch_size, num_img_channels, config.image_size, config.image_size)),
-            batch_size=config.eval_batch_size,
-            shuffle=eval_shuffle_dataloader
-        )
-    else:
-        train_dataloader = torch.utils.data.DataLoader(
+        def transform(examples):
+            # Preprocessing for both master and defect images
+            preprocess = transforms.Compose(
+                [
+            transforms.Resize((config.image_size, config.image_size)),
+            transforms.ToTensor(),
+            transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]),
+        ]
+    )
+
+            if not load_images_as_np_arrays:
+                # Load both master (normal) and defect PCB images
+                master_images = [preprocess(image.convert("RGB")) for image in examples["master_image"]]
+                defect_images = [preprocess(image.convert("RGB")) for image in examples["defect_image"]]
+            else:
+                master_images = [
+                    preprocess(F.interpolate(torch.tensor(image).unsqueeze(0).float(), 
+                    size=(config.image_size, config.image_size)).squeeze()) 
+                    for image in examples["master_image"]
+                ]
+                defect_images = [
+                    preprocess(F.interpolate(torch.tensor(image).unsqueeze(0).float(),
+                    size=(config.image_size, config.image_size)).squeeze())
+                    for image in examples["defect_image"]
+                ]
+    
+            # Add filenames for tracking
+            images_filenames = examples["pair_id"]
+    
+            return {
+                "master_images": master_images,
+                "defect_images": defect_images,
+                "image_filenames": images_filenames
+            }
+
+        if dataset.startswith("Thanarit/"):
+            # Load HuggingFace dataset
+            ds = load_dataset(dataset)
+            dataset_train = ds["train"]
+            
+            # Select only first 100 examples
+            dataset_train = dataset_train.select(range(100))
+            
+            # Cast image columns
+            dataset_train = dataset_train.cast_column("master_image", datasets.Image())
+            dataset_train = dataset_train.cast_column("defect_image", datasets.Image())
+            
+            # Set transform
+            dataset_train.set_transform(transform)
+            
+            # Create dataloaders
+            train_dataloader = torch.utils.data.DataLoader(
                 dataset_train, 
                 batch_size=config.train_batch_size, 
                 shuffle=True
-                )
-
-        eval_dataloader = torch.utils.data.DataLoader(
-                dataset_eval, 
-                batch_size=config.eval_batch_size, 
+            )
+            
+            # For eval/testing, use a subset of training data
+            eval_dataloader = torch.utils.data.DataLoader(
+                dataset_train.select(range(min(32, len(dataset_train)))), 
+                batch_size=config.eval_batch_size,
                 shuffle=eval_shuffle_dataloader
-                )
+            )
 
     # define the model
     in_channels = num_img_channels
@@ -289,28 +334,28 @@ def main(
             in_channels = len(seg_types) + in_channels
 
     model = diffusers.UNet2DModel(
-        sample_size=config.image_size,  # the target image resolution
-        in_channels=in_channels,  # the number of input channels, 3 for RGB images
-        out_channels=num_img_channels,  # the number of output channels
-        layers_per_block=2,  # how many ResNet layers to use per UNet block
-        block_out_channels=(128, 128, 256, 256, 512, 512),  # the number of output channes for each UNet block
-        down_block_types=(
-            "DownBlock2D",  # a regular ResNet downsampling block
+        sample_size=config.image_size,
+        in_channels=num_img_channels * 2,  # Double channels for concatenated input
+        out_channels=num_img_channels,
+        layers_per_block=2,
+        block_out_channels=(128, 128, 256, 256, 512, 512),
+        down_block_types=( 
+            "DownBlock2D",
+            "DownBlock2D", 
             "DownBlock2D",
             "DownBlock2D",
+            "AttnDownBlock2D",
             "DownBlock2D",
-            "AttnDownBlock2D",  # a ResNet downsampling block with spatial self-attention
-            "DownBlock2D",
-        ),
+            ),
         up_block_types=(
-            "UpBlock2D",  # a regular ResNet upsampling block
-            "AttnUpBlock2D",  # a ResNet upsampling block with spatial self-attention
+            "UpBlock2D",
+            "AttnUpBlock2D", 
             "UpBlock2D",
             "UpBlock2D",
             "UpBlock2D",
             "UpBlock2D"
-        ),
-    )
+    ),
+)
 
     if (mode == "train" and resume_epoch is not None) or "eval" in mode:
         if mode == "train":

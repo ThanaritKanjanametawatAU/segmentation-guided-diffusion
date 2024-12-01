@@ -86,225 +86,44 @@ def evaluate_sample_many(
 
 
 
-def evaluate_generation(
-        config, 
-        model, 
-        noise_scheduler, 
-        eval_dataloader, 
-        class_label_cfg=None, 
-        translate=False, 
-        eval_mask_removal=False, 
-        eval_blank_mask=False,
-        device='cuda'
-        ):
-    """
-    general function to evaluate (possibly mask-guided) trained image generation model in useful ways.
-    also has option to use CFG for class-conditioned sampling (otherwise, class-conditional models will be evaluated using naive class conditioning and sampling from both classes).
-
-    can also evaluate for image translation.
-    """
-
-    # for loading segs to condition on:
-    eval_dataloader = iter(eval_dataloader)
-
-    if config.segmentation_guided:
-        seg_batch = next(eval_dataloader)
-        if eval_blank_mask:
-            # use blank masks
-            for k, v in seg_batch.items():
-                if k.startswith("seg_"):
-                    seg_batch[k] = torch.zeros_like(v)
-
-    # setup for sampling
-    # After each epoch you optionally sample some demo images with evaluate() and save the model
+def evaluate_generation(config, model, noise_scheduler, eval_dataloader, device='cuda'):
+    # Setup for sampling
     if config.model_type == "DDPM":
-        if config.segmentation_guided:
-            pipeline = SegGuidedDDPMPipeline(
-                unet=model.module, scheduler=noise_scheduler, eval_dataloader=eval_dataloader, external_config=config
-                )
-        else:
-            pipeline = diffusers.DDPMPipeline(unet=model.module, scheduler=noise_scheduler)
+        pipeline = PCBDiffusionPipeline(
+            unet=model.module, 
+            scheduler=noise_scheduler, 
+            external_config=config
+        )
     elif config.model_type == "DDIM":
-        if config.segmentation_guided:
-            pipeline = SegGuidedDDIMPipeline(
-                unet=model.module, scheduler=noise_scheduler, eval_dataloader=eval_dataloader, external_config=config
-                )
-        else:
-            pipeline = diffusers.DDIMPipeline(unet=model.module, scheduler=noise_scheduler)
+        pipeline = PCBDiffusionPipeline(
+            unet=model.module,
+            scheduler=noise_scheduler,
+            external_config=config
+        )
 
-    # sample some images
-    if config.segmentation_guided:
-        evaluate(config, -1, pipeline, seg_batch, class_label_cfg, translate)
-    else:
-        if config.class_conditional:
-            raise NotImplementedError("TODO: implement CFG and naive conditioning sampling for non-seg-guided pipelines, including for image translation")
-        evaluate(config, -1, pipeline)
+    # Get a batch of master images to condition on
+    eval_batch = next(iter(eval_dataloader))
+    master_images = eval_batch['master_images'].to(device)
 
-    # seg-guided specific visualizations
-    if config.segmentation_guided and eval_mask_removal:
-        plot_result_masks_multiclass = True
-        if plot_result_masks_multiclass:
-            pipeoutput_type = 'np'
-        else:
-            pipeoutput_type = 'pil'
+    # Generate images
+    images = pipeline(
+        batch_size=config.eval_batch_size,
+        master_image=master_images,
+    ).images
 
-        # visualize segmentation-guided sampling by seeing what happens 
-        # when segs removed
-        num_viz = config.eval_batch_size
+    # Make a grid out of the images
+    cols = int(math.ceil(math.sqrt(len(images))))
+    rows = int(math.ceil(len(images) / cols))
+    image_grid = make_grid(images, rows=rows, cols=cols)
 
-        # choose one seg to sample from; duplicate it
-        eval_same_image = False
-        if eval_same_image:
-            seg_batch = {k: torch.cat(num_viz*[v[:1]]) for k, v in seg_batch.items()}
+    # Save the images
+    test_dir = os.path.join(config.output_dir, "samples")
+    os.makedirs(test_dir, exist_ok=True)
+    image_grid.save(f"{test_dir}/samples.png")
 
-        result_masks = torch.Tensor()
-        multiclass_masks = []
-        result_imgs = []
-        multiclass_masks_shape = (config.eval_batch_size, 1, config.image_size, config.image_size)
-
-        # will plot segs + sampled images
-        for seg_type in seg_batch.keys():
-            if seg_type.startswith("seg_"):
-                #convert from tensor to PIL
-                seg_batch_plt = seg_batch[seg_type].cpu()
-                result_masks = torch.cat((result_masks, seg_batch_plt))
-        
-        # sample given all segs
-        multiclass_masks.append(convert_segbatch_to_multiclass(multiclass_masks_shape, seg_batch, config, device))
-        full_seg_imgs = pipeline(
-            batch_size = num_viz,
-            seg_batch=seg_batch,
-            class_label_cfg=class_label_cfg,
-            translate=translate,
-            output_type=pipeoutput_type
-        ).images
-        if plot_result_masks_multiclass:
-            result_imgs.append(full_seg_imgs)
-        else:
-            result_imgs += full_seg_imgs
-
-        # only sample from masks with chosen classes removed
-        chosen_class_combinations = None
-        #chosen_class_combinations = [ #for example:
-        #   {"seg_all": [1, 2]}
-        #]
-        if chosen_class_combinations is not None:
-            for allseg_classes in chosen_class_combinations:
-                # remove all chosen classes
-                seg_batch_removed = deepcopy(seg_batch)
-                for seg_type in seg_batch_removed.keys():
-                    # some datasets have multiple tissue segs stored in multiple masks
-                    if seg_type.startswith("seg_"):
-                        classes = allseg_classes[seg_type]
-                        for mask_val in classes:
-                            if mask_val != 0:
-                                remove_mask = (seg_batch_removed[seg_type]*255).int() == mask_val
-                                seg_batch_removed[seg_type][remove_mask] = 0
-
-                seg_batch_removed_plt = torch.cat([seg_batch_removed[seg_type].cpu() for seg_type in seg_batch_removed.keys() if seg_type.startswith("seg_")])
-                result_masks = torch.cat((result_masks, seg_batch_removed_plt))
-
-                multiclass_masks.append(convert_segbatch_to_multiclass(
-                multiclass_masks_shape, 
-                    seg_batch_removed, config, device))
-                # add images conditioned on some segs but not all
-                removed_seg_imgs = pipeline(
-                    batch_size = config.eval_batch_size,
-                    seg_batch=seg_batch_removed,
-                    class_label_cfg=class_label_cfg,
-                    translate=translate,
-                    output_type=pipeoutput_type
-                ).images
-
-                if plot_result_masks_multiclass:
-                    result_imgs.append(removed_seg_imgs)
-                else:
-                    result_imgs += removed_seg_imgs
-
-
-        else:
-            for seg_type in seg_batch.keys():
-                # some datasets have multiple tissue segs stored in multiple masks
-                if seg_type.startswith("seg_"):
-                    seg_batch_removed = seg_batch
-                    for mask_val in seg_batch[seg_type].unique():
-                        if mask_val != 0:
-                            remove_mask = seg_batch[seg_type] == mask_val
-                            seg_batch_removed[seg_type][remove_mask] = 0
-
-                            seg_batch_removed_plt = torch.cat([seg_batch_removed[seg_type].cpu() for seg_type in seg_batch.keys() if seg_type.startswith("seg_")])
-                            result_masks = torch.cat((result_masks, seg_batch_removed_plt))
-
-                            multiclass_masks.append(convert_segbatch_to_multiclass(
-                            multiclass_masks_shape, 
-                                seg_batch_removed, config, device))
-                            # add images conditioned on some segs but not all
-                            removed_seg_imgs = pipeline(
-                                batch_size = config.eval_batch_size,
-                                seg_batch=seg_batch_removed,
-                                class_label_cfg=class_label_cfg,
-                                translate=translate,
-                                output_type=pipeoutput_type
-                            ).images
-
-                            if plot_result_masks_multiclass:
-                                result_imgs.append(removed_seg_imgs)
-                            else:
-                                result_imgs += removed_seg_imgs
-
-        if plot_result_masks_multiclass:
-            multiclass_masks = np.squeeze(torch.cat(multiclass_masks).cpu().numpy())
-            multiclass_masks = (multiclass_masks*255).astype(np.uint8)
-            result_imgs = np.squeeze(np.concatenate(np.array(result_imgs), axis=0))
-
-            # reverse interleave
-            plot_imgs = np.zeros_like(result_imgs)
-            plot_imgs[0:len(plot_imgs)//2] = result_imgs[0::2]
-            plot_imgs[len(plot_imgs)//2:] = result_imgs[1::2]
-
-            plot_masks = np.zeros_like(multiclass_masks)
-            plot_masks[0:len(plot_masks)//2] = multiclass_masks[0::2]
-            plot_masks[len(plot_masks)//2:] = multiclass_masks[1::2]
-
-            fig, axs = plt.subplots(
-                2, len(plot_masks), 
-                figsize=(len(plot_masks), 2), 
-                dpi=600
-            )
-
-            for i, img in enumerate(plot_imgs):
-                if config.dataset == 'breast_mri':
-                    colors = ['black', 'white', 'red', 'blue']
-                elif config.dataset == 'ct_organ_large':
-                    colors = ['black', 'blue', 'green', 'red', 'yellow', 'magenta']
-                else: 
-                    raise ValueError('Unknown dataset')
-
-                cmap = ListedColormap(colors)
-                axs[0,i].imshow(plot_masks[i], cmap=cmap, vmin=0, vmax=len(colors)-1)
-                axs[0,i].axis('off')
-                axs[1,i].imshow(img, cmap='gray')
-                axs[1,i].axis('off')
-
-            plt.subplots_adjust(wspace=0, hspace=0)
-            plt.savefig('ablated_samples_{}.pdf'.format(config.dataset), bbox_inches='tight')
-            plt.show()
-
-
-
-        else:
-            # Make a grid out of the images
-            cols = num_viz
-            rows = math.ceil(len(result_imgs) / cols)
-            image_grid = make_grid(result_imgs, rows=rows, cols=cols)
-
-            # Save the images
-            test_dir = os.path.join(config.output_dir, "samples")
-            os.makedirs(test_dir, exist_ok=True)
-            image_grid.save(f"{test_dir}/mask_removal_imgs.png")
-
-            save_image(result_masks, f"{test_dir}/mask_removal_masks.png", normalize=True, 
-                    nrow=cols*len(seg_batch.keys()) - 2)
+    # Also save the conditioning master images for reference
+    master_grid = make_grid([img for img in master_images], rows=rows, cols=cols)
+    master_grid.save(f"{test_dir}/master_images.png")
 
 def convert_segbatch_to_multiclass(shape, segmentations_batch, config, device):
     # NOTE: this generic function assumes that segs don't overlap
@@ -366,26 +185,16 @@ def add_segmentations_to_noise(noisy_images, segmentations_batch, config, device
 ####################
 # general DDPM
 ####################
-def evaluate(config, epoch, pipeline, seg_batch=None, class_label_cfg=None, translate=False):
-    # Either generate or translate images,
-    # possibly mask guided and/or class conditioned.
-    # The default pipeline output type is `List[PIL.Image]`
-
-    if config.segmentation_guided:
-        images = pipeline(
-            batch_size = config.eval_batch_size,
-            seg_batch=seg_batch,
-            class_label_cfg=class_label_cfg,
-            translate=translate
-        ).images
-    else:
-        images = pipeline(
-            batch_size = config.eval_batch_size,
-            # TODO: implement CFG and naive conditioning sampling for non-seg-guided pipelines (also needed for translation)
-        ).images
+def evaluate(config, epoch, pipeline, master_images=None):
+    """Evaluate model by generating samples and saving them as image grids"""
+    # Generate samples
+    images = pipeline(
+        batch_size=config.eval_batch_size,
+        master_image=master_images,
+    ).images
 
     # Make a grid out of the images
-    cols = 4
+    cols = min(8, len(images))
     rows = math.ceil(len(images) / cols)
     image_grid = make_grid(images, rows=rows, cols=cols)
 
@@ -394,16 +203,16 @@ def evaluate(config, epoch, pipeline, seg_batch=None, class_label_cfg=None, tran
     os.makedirs(test_dir, exist_ok=True)
     image_grid.save(f"{test_dir}/{epoch:04d}.png")
 
-    # save segmentations we conditioned the samples on
-    if config.segmentation_guided:
-        for seg_type in seg_batch.keys():
-            if seg_type.startswith("seg_"):
-                save_image(seg_batch[seg_type], f"{test_dir}/{epoch:04d}_cond_{seg_type}.png", normalize=True, nrow=cols)
-
-        # as well as original images that the segs belong to
-        img_og = seg_batch['images']
-        save_image(img_og, f"{test_dir}/{epoch:04d}_orig.png", normalize=True, nrow=cols)
-
+    # Save conditioning master images
+    if master_images is not None:
+        # Convert tensor to list of tensors
+        master_images_list = [img for img in master_images]
+        master_grid = make_grid(
+            master_images_list,
+            rows=rows,
+            cols=cols
+        )
+        master_grid.save(f"{test_dir}/{epoch:04d}_master.png")
 
 # custom diffusers pipelines for sampling from segmentation-guided models
 class SegGuidedDDPMPipeline(DiffusionPipeline):
@@ -850,3 +659,61 @@ class SegGuidedDDIMPipeline(DiffusionPipeline):
             return (image,)
 
         return ImagePipelineOutput(images=image)
+
+
+# In eval.py, add this new pipeline class:
+
+class PCBDiffusionPipeline(DiffusionPipeline):
+    """Pipeline for PCB defect generation using paired normal/defect images"""
+    model_cpu_offload_seq = "unet"
+
+    def __init__(self, unet, scheduler, external_config):
+        super().__init__()
+        self.register_modules(unet=unet, scheduler=scheduler)
+        self.external_config = external_config
+
+    @torch.no_grad()
+    def __call__(
+        self,
+        batch_size: int = 1,
+        generator: Optional[torch.Generator] = None,
+        master_image: Optional[torch.FloatTensor] = None,
+        num_inference_steps: int = 1000,
+        output_type: Optional[str] = "pil",
+        return_dict: bool = True,
+    ) -> Union[ImagePipelineOutput, Tuple]:
+        # Start from random noise
+        if self.device.type == "mps":
+            x_t = torch.randn((batch_size, 3, self.unet.config.sample_size, self.unet.config.sample_size),
+                             generator=generator)
+            x_t = x_t.to(self.device)
+        else:
+            x_t = torch.randn((batch_size, 3, self.unet.config.sample_size, self.unet.config.sample_size),
+                             generator=generator,
+                             device=self.device)
+
+        # Set timesteps
+        self.scheduler.set_timesteps(num_inference_steps)
+
+        # Denoising loop
+        for t in self.progress_bar(self.scheduler.timesteps):
+            # Concatenate master image with current noisy image
+            model_input = torch.cat([x_t, master_image], dim=1)
+            
+            # Get model prediction
+            model_output = self.unet(model_input, t).sample
+            
+            # Update sample with scheduler
+            x_t = self.scheduler.step(model_output, t, x_t, generator=generator).prev_sample
+
+        # Convert to images
+        x_0 = (x_t / 2 + 0.5).clamp(0, 1)
+        x_0 = x_0.cpu().permute(0, 2, 3, 1).numpy()
+
+        if output_type == "pil":
+            x_0 = self.numpy_to_pil(x_0)
+
+        if not return_dict:
+            return (x_0,)
+
+        return ImagePipelineOutput(images=x_0)
