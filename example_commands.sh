@@ -11,6 +11,7 @@ python main.py \
     --save_image_epochs 20 \
     --save_model_epochs 50
 
+# Evaluation
 python main.py \
     --mode eval_many \
     --model_type DDIM \
@@ -21,6 +22,7 @@ python main.py \
     --eval_sample_size 4 \
     --checkpoint 14
 
+# Resume Training
 python main.py \
     --mode train \
     --model_type DDIM \
@@ -29,10 +31,12 @@ python main.py \
     --dataset Thanarit/PCB \
     --train_batch_size 10 \
     --eval_batch_size 1 \
-    --num_epochs 10 \
+    --num_epochs 15 \
     --save_image_epochs 2 \
     --save_model_epochs 2 \
-    --resume_epoch 4
+    --resume_epoch 14
+
+
 
 
 

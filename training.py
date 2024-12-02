@@ -118,7 +118,7 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, eval
 
     # Load checkpoint if resuming training
     if config.resume_epoch is not None:
-        start_epoch = load_checkpoint(config, optimizer, lr_scheduler, scaler)
+        start_epoch = load_checkpoint(config, optimizer, lr_scheduler, scaler) + 1
     else:
         start_epoch = 1
 
