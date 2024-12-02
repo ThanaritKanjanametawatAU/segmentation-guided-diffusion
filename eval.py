@@ -199,20 +199,15 @@ def evaluate(config, epoch, pipeline, master_images=None):
     image_grid = make_grid(images, rows=rows, cols=cols)
 
     # Save the images
-    test_dir = os.path.join(config.output_dir, "samples")
-    os.makedirs(test_dir, exist_ok=True)
-    image_grid.save(f"{test_dir}/{epoch:04d}.png")
+    sample_dir = os.path.join(config.output_dir, "samples")
+    os.makedirs(sample_dir, exist_ok=True)
+    image_grid.save(f"{sample_dir}/sample_{epoch:04d}.png")
 
-    # Save conditioning master images
+    # Also save master images if provided
     if master_images is not None:
-        # Convert tensor to list of tensors
         master_images_list = [img for img in master_images]
-        master_grid = make_grid(
-            master_images_list,
-            rows=rows,
-            cols=cols
-        )
-        master_grid.save(f"{test_dir}/{epoch:04d}_master.png")
+        master_grid = make_grid(master_images_list, rows=rows, cols=cols)
+        master_grid.save(f"{sample_dir}/master_{epoch:04d}.png")
 
 # custom diffusers pipelines for sampling from segmentation-guided models
 class SegGuidedDDPMPipeline(DiffusionPipeline):

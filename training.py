@@ -8,6 +8,7 @@ from pathlib import Path
 from tqdm.auto import tqdm
 import numpy as np
 from datetime import timedelta
+import json
 
 import torch
 from torch import nn
@@ -57,87 +58,189 @@ class TrainingConfig:
     # (see "Classifier-free guidance resolution weighting." in ControlNet paper)
 
 
-def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, eval_dataloader, lr_scheduler, device='cuda'):
+def save_model_checkpoint(config, epoch, pipeline, optimizer, lr_scheduler, scaler=None):
+    """Helper function to save model checkpoint and training state"""
+    
+    # Create output directory if it doesn't exist
+    os.makedirs(config.output_dir, exist_ok=True)
+    os.makedirs(os.path.join(config.output_dir, "unet"), exist_ok=True)
+    
+    # 1. Save the UNet model
+    pipeline.unet.save_pretrained(os.path.join(config.output_dir, "unet"))
+    
+    # 2. Save training state
+    checkpoint = {
+        'epoch': epoch,
+        'optimizer_state_dict': optimizer.state_dict(),
+        'lr_scheduler_state_dict': lr_scheduler.state_dict(),
+    }
+    
+    # Add scaler state if using mixed precision
+    if scaler is not None:
+        checkpoint['scaler_state_dict'] = scaler.state_dict()
+        
+    # Save checkpoint
+    os.makedirs(os.path.join(config.output_dir, "checkpoints"), exist_ok=True)
+    checkpoint_path = os.path.join(config.output_dir, "checkpoints", f'checkpoint_{epoch}.safetensors')
+    torch.save(checkpoint, checkpoint_path)
+    
+    # 3. Save config
+    config_dict = {k: str(v) if not isinstance(v, (int, float, bool, str, type(None))) 
+                  else v for k, v in vars(config).items()}
+    config_path = os.path.join(config.output_dir, "unet", 'config.json')
+    with open(config_path, 'w') as f:
+        json.dump(config_dict, f, indent=4)
+
+def load_checkpoint(config, optimizer, lr_scheduler, scaler=None):
+    """Helper function to load model checkpoint and training state"""
+    
+    checkpoint_path = os.path.join(config.output_dir, f'checkpoint_{config.resume_epoch}.pt')
+    if not os.path.exists(checkpoint_path):
+        raise FileNotFoundError(f"No checkpoint found at {checkpoint_path}")
+        
+    checkpoint = torch.load(checkpoint_path)
+    
+    # Load training state
+    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    lr_scheduler.load_state_dict(checkpoint['lr_scheduler_state_dict'])
+    
+    if scaler is not None and 'scaler_state_dict' in checkpoint:
+        scaler.load_state_dict(checkpoint['scaler_state_dict'])
+        
+    return checkpoint['epoch']
+
+def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, eval_dataloader, lr_scheduler, device='cuda',):
     global_step = 0
     
-    # logging
-    run_name = '{}-{}-{}'.format(config.model_type.lower(), config.dataset, config.image_size)
+    # Initialize gradient scaler for mixed precision training
+    scaler = torch.cuda.amp.GradScaler(enabled=config.mixed_precision == 'fp16')
+    
+    # Logging setup
+    run_name = f"{config.model_type.lower()}-{config.dataset}-{config.image_size}"
     if config.segmentation_guided:
         run_name += "-segguided"
     writer = SummaryWriter(comment=run_name)
 
-    # For loading segs to condition on:
-    eval_dataloader = iter(eval_dataloader)
+    # Evaluation data handling
+    eval_dataloader_original = eval_dataloader
+    eval_iter = iter(eval_dataloader)
 
-    start_epoch = 0
+    # Load checkpoint if resuming training
     if config.resume_epoch is not None:
-        start_epoch = config.resume_epoch
+        start_epoch = load_checkpoint(config, optimizer, lr_scheduler, scaler)
+    else:
+        start_epoch = 1
 
-    for epoch in range(start_epoch, config.num_epochs):
+    for epoch in range(start_epoch, config.num_epochs+1):
+        print("training at epoch {}".format(epoch) + "\n")
+        model.train()
         progress_bar = tqdm(total=len(train_dataloader))
         progress_bar.set_description(f"Epoch {epoch}")
-
-        model.train()
+        
+        total_loss = 0
+        optimizer.zero_grad(set_to_none=True)  # More efficient than zero_grad()
 
         for step, batch in enumerate(train_dataloader):
-            # Get both master and defect images
-            master_images = batch['master_images'].to(device)
-            defect_images = batch['defect_images'].to(device)
-
-            # Create valid mask (where defect_images differ from master_images)
+            # Move data to device
+            master_images = batch['master_images'].to(device, non_blocking=True)
+            defect_images = batch['defect_images'].to(device, non_blocking=True)
+            
+            # Calculate valid mask
             valid_mask = (defect_images != master_images).float()
-
+            
             # Sample noise and timesteps
-            noise = torch.randn(defect_images.shape).to(device)
+            noise = torch.randn_like(defect_images, device=device)
             bs = defect_images.shape[0]
-            timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (bs,), device=device).long()
+            timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (bs,), device=device)
 
-            # Add noise to the defect images
-            noisy_defects = noise_scheduler.add_noise(defect_images, noise, timesteps)
+            # Mixed precision training
+            with torch.cuda.amp.autocast(enabled=config.mixed_precision == 'fp16'):
+                # Add noise to defect images
+                noisy_defects = noise_scheduler.add_noise(defect_images, noise, timesteps)
+                
+                # Prepare model input
+                model_input = torch.cat([noisy_defects, master_images], dim=1)
+                
+                # Get model prediction
+                noise_pred = model(model_input, timesteps, return_dict=False)[0]
+                
+                # Calculate loss
+                loss = F.mse_loss(noise_pred * valid_mask, noise * valid_mask)
+                loss = loss / config.gradient_accumulation_steps
 
-            # Prepare model input by concatenating noisy defects with master images
-            model_input = torch.cat([noisy_defects, master_images], dim=1)
-
-            # Get model prediction
-            noise_pred = model(model_input, timesteps, return_dict=False)[0]
-
-            # Calculate loss with valid mask
-            loss = F.mse_loss(noise_pred * valid_mask, noise * valid_mask)
-
-            loss.backward()
-            nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            optimizer.step()
-            lr_scheduler.step()
-            optimizer.zero_grad()
+            # Backward pass with gradient scaling
+            scaler.scale(loss).backward()
+            
+            # Update weights if gradient accumulation complete
+            if (step + 1) % config.gradient_accumulation_steps == 0:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                
+                scaler.step(optimizer)
+                scaler.update()
+                lr_scheduler.step()
+                optimizer.zero_grad(set_to_none=True)
+                
+                # Logging
+                total_loss += loss.detach().item()
+                logs = {
+                    "loss": loss.detach().item(),
+                    "lr": lr_scheduler.get_last_lr()[0],
+                    "step": global_step
+                }
+                writer.add_scalar("train/loss", loss.detach().item(), global_step)
+                writer.add_scalar("train/lr", lr_scheduler.get_last_lr()[0], global_step)
+                
+                progress_bar.set_postfix(**logs)
+                global_step += 1
 
             progress_bar.update(1)
-            logs = {"loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0], "step": global_step}
-            writer.add_scalar("loss", loss.detach().item(), global_step)
+
+        # Evaluation and checkpointing
+        if epoch % config.save_image_epochs == 0 or epoch == config.num_epochs:
+            print("evaluating at epoch {}".format(epoch) + "\n")
+            model.eval()
             
-            progress_bar.set_postfix(**logs)
-            global_step += 1
+            pipeline_class = PCBDiffusionPipeline
+            pipeline = pipeline_class(
+                unet=model.module,
+                scheduler=noise_scheduler,
+                external_config=config
+            )
 
-        # After each epoch you optionally sample some demo images and save the model
-        if epoch == 0 or (epoch + 1) % config.save_image_epochs == 0 or epoch == config.num_epochs - 1:
-            if config.model_type == "DDPM":
-                pipeline = PCBDiffusionPipeline(
-                    unet=model.module, 
-                    scheduler=noise_scheduler,
-                    external_config=config
-                )
-            elif config.model_type == "DDIM":
-                pipeline = PCBDiffusionPipeline(
-                    unet=model.module,
-                    scheduler=noise_scheduler,
-                    external_config=config
-                )
+            # Get evaluation batch
+            try:
+                eval_batch = next(eval_iter)
+            except StopIteration:
+                eval_iter = iter(eval_dataloader_original)
+                eval_batch = next(eval_iter)
 
-            # Get some master images for conditioning
-            eval_batch = next(eval_dataloader)
-            master_images_eval = eval_batch['master_images'].to(device)
+            with torch.no_grad(), torch.cuda.amp.autocast(enabled=config.mixed_precision == 'fp16'):
+                master_images_eval = eval_batch['master_images'].to(device)
+                evaluate(config, epoch, pipeline, master_images_eval)
 
-            # Generate samples
-            evaluate(config, epoch, pipeline, master_images_eval)
+            # Log average loss for epoch
+            avg_loss = total_loss / len(train_dataloader)
+            writer.add_scalar("train/epoch_loss", avg_loss, epoch)
 
-        if (epoch + 1) % config.save_model_epochs == 0:
-            pipeline.save_pretrained(config.output_dir)
+        # Save checkpoints
+        if epoch % config.save_model_epochs == 0 or epoch == config.num_epochs:
+            print("saving model checkpoint at epoch {}".format(epoch) + "\n")
+            save_model_checkpoint(
+                config=config,
+                epoch=epoch,
+                pipeline=pipeline,
+                optimizer=optimizer,
+                lr_scheduler=lr_scheduler,
+                scaler=scaler if config.mixed_precision == 'fp16' else None
+            )
+            
+            # Also save config separately for easy access
+            # config_path = os.path.join(config.output_dir, 'config.json')
+            # with open(config_path, 'w') as f:
+            #     # Convert dataclass to dictionary
+            #     config_dict = {k: str(v) if not isinstance(v, (int, float, bool, str, type(None))) 
+            #                  else v for k, v in config.__dict__.items()}
+            #     json.dump(config_dict, f, indent=4)
+
+    writer.close()

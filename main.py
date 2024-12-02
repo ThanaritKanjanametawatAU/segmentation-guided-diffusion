@@ -14,6 +14,8 @@ from diffusers.optimization import get_cosine_schedule_with_warmup
 import datasets
 from datasets import load_dataset
 
+# torchvision imports
+import torchvision
 
 # custom imports
 from training import TrainingConfig, train_loop
@@ -36,6 +38,8 @@ def main(
     resume_epoch=None,
     use_ablated_segmentations=False,
     eval_shuffle_dataloader=True,
+    save_image_epochs=20,
+    save_model_epochs=30,
 
     # arguments only used in eval
     eval_mask_removal=False,
@@ -53,7 +57,8 @@ def main(
 
 
     # load config
-    output_dir = '{}-{}-{}'.format(model_type.lower(), dataset, img_size)  # the model namy locally and on the HF Hub
+    dataset_formatted = dataset.replace('/', '_')
+    output_dir = '{}-{}-{}'.format(model_type.lower(), dataset_formatted, img_size)  # the model namy locally and on the HF Hub
     if segmentation_guided:
         output_dir += "-segguided"
         assert seg_dir is not None, "must provide segmentation directory for segmentation guided training/sampling"
@@ -87,6 +92,8 @@ def main(
         eval_batch_size = eval_batch_size,
         num_epochs = num_epochs,
         output_dir = output_dir,
+        save_image_epochs=save_image_epochs,
+        save_model_epochs=save_model_epochs,
         model_type=model_type,
         resume_epoch=resume_epoch,
         use_ablated_segmentations=use_ablated_segmentations
@@ -299,28 +306,29 @@ def main(
             ds = load_dataset(dataset)
             dataset_train = ds["train"]
             
-            # Select only first 100 examples
-            dataset_train = dataset_train.select(range(100))
+            # Select only first 100 examples for training
+            dataset_train = dataset_train.select(range(1000))
             
-            # Cast image columns
+            # Cast image columns 
             dataset_train = dataset_train.cast_column("master_image", datasets.Image())
             dataset_train = dataset_train.cast_column("defect_image", datasets.Image())
             
             # Set transform
             dataset_train.set_transform(transform)
             
-            # Create dataloaders
+            # Create training dataloader
             train_dataloader = torch.utils.data.DataLoader(
                 dataset_train, 
-                batch_size=config.train_batch_size, 
+                batch_size=config.train_batch_size,
                 shuffle=True
             )
             
-            # For eval/testing, use a subset of training data
+            # For eval/testing, use just one specific example
+            specific_example = dataset_train.select([0])  # Select first example
             eval_dataloader = torch.utils.data.DataLoader(
-                dataset_train.select(range(min(32, len(dataset_train)))), 
-                batch_size=config.eval_batch_size,
-                shuffle=eval_shuffle_dataloader
+                specific_example,
+                batch_size=1,  # Keep batch size 1 since we're using one example 
+                shuffle=False  # Don't shuffle to get same example each time
             )
 
     # define the model
@@ -459,6 +467,9 @@ if __name__ == "__main__":
     parser.add_argument('--eval_blank_mask', action='store_true', help='if true, evaluate sampling conditioned on blank (zeros) masks')
     parser.add_argument('--eval_sample_size', type=int, default=1000, help='number of images to sample when using eval_many mode')
 
+    parser.add_argument('--save_image_epochs', type=int, default=20, help='save sample images every N epochs')
+    parser.add_argument('--save_model_epochs', type=int, default=30, help='save model checkpoint every N epochs')
+
     args = parser.parse_args()
 
     main(
@@ -478,6 +489,8 @@ if __name__ == "__main__":
         args.resume_epoch,
         args.use_ablated_segmentations,
         not args.eval_noshuffle_dataloader,
+        args.save_image_epochs,
+        args.save_model_epochs, 
 
         # args only used in eval
         args.eval_mask_removal,
