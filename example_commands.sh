@@ -2,14 +2,14 @@
 python main.py \
     --mode train \
     --model_type DDIM \
-    --img_size 128 \
+    --img_size 512 \
     --num_img_channels 3 \
     --dataset Thanarit/PCB \
-    --train_batch_size 10 \
+    --train_batch_size 2 \
     --eval_batch_size 1 \
-    --num_epochs 4 \
-    --save_image_epochs 2 \
-    --save_model_epochs 2
+    --num_epochs 1000 \
+    --save_image_epochs 20 \
+    --save_model_epochs 50
 
 python main.py \
     --mode eval_many \

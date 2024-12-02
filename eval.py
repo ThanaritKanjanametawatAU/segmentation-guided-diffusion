@@ -639,9 +639,6 @@ class SegGuidedDDIMPipeline(DiffusionPipeline):
 
         return ImagePipelineOutput(images=image)
 
-
-# In eval.py, add this new pipeline class:
-
 class PCBDiffusionPipeline(DiffusionPipeline):
     """Pipeline for PCB defect generation using paired normal/defect images"""
     model_cpu_offload_seq = "unet"
