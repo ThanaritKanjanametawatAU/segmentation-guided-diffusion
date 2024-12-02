@@ -307,7 +307,7 @@ def main(
             ds = load_dataset(dataset)
             dataset_train = ds["train"]
 
-            test_example = dataset_train.select([9999, 10000])
+            test_example = dataset_train.select([9999])
             test_example.set_transform(transform)
             
             # Select only first 1000 examples for training
@@ -341,6 +341,10 @@ def main(
                 batch_size=1,  # Keep batch size 1 since we're using one example 
                 shuffle=False  # Don't shuffle to get same example each time
             )
+
+        print(f"Number of training samples: {len(dataset_train)}")
+        print(f"Number of test samples: {len(test_dataloader)}")
+        print(f"Number of validation samples: {len(eval_dataloader)}")
 
     # define the model
     in_channels = num_img_channels

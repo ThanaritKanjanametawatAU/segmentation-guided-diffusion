@@ -8,7 +8,7 @@ python main.py \
     --train_batch_size 2 \
     --eval_batch_size 1 \
     --num_epochs 1000 \
-    --save_image_epochs 20 \
+    --save_image_epochs 5 \
     --save_model_epochs 50
 
 # Evaluation
