@@ -30,59 +30,43 @@ def evaluate_sample_many(
     eval_dataloader,
     device='cuda'
     ):
-
-    # for loading segs to condition on:
-    # setup for sampling
+    
+    # Get a batch of master images to condition on
+    eval_batch = next(iter(eval_dataloader))
+    master_images = eval_batch['master_images'].to(device)
+    
+    # Setup for sampling
     if config.model_type == "DDPM":
-        if config.segmentation_guided:
-            pipeline = SegGuidedDDPMPipeline(
-                unet=model.module, scheduler=noise_scheduler, eval_dataloader=eval_dataloader, external_config=config
-                )
-        else:
-            pipeline = diffusers.DDPMPipeline(unet=model.module, scheduler=noise_scheduler)
+        pipeline = PCBDiffusionPipeline(
+            unet=model.module,
+            scheduler=noise_scheduler,
+            external_config=config
+        )
     elif config.model_type == "DDIM":
-        if config.segmentation_guided:
-            pipeline = SegGuidedDDIMPipeline(
-                unet=model.module, scheduler=noise_scheduler, eval_dataloader=eval_dataloader, external_config=config
-                )
-        else:
-            pipeline = diffusers.DDIMPipeline(unet=model.module, scheduler=noise_scheduler)
+        pipeline = PCBDiffusionPipeline(
+            unet=model.module,
+            scheduler=noise_scheduler,
+            external_config=config
+        )
 
-
-    sample_dir = test_dir = os.path.join(config.output_dir, "samples_many_{}".format(sample_size))
-    if not os.path.exists(sample_dir):
-        os.makedirs(sample_dir)
+    sample_dir = os.path.join(config.output_dir, f"samples_many_{sample_size}")
+    os.makedirs(sample_dir, exist_ok=True)
 
     num_sampled = 0
-    # keep sampling images until we have enough
-    for bidx, seg_batch in tqdm(enumerate(eval_dataloader), total=len(eval_dataloader)):
-        if num_sampled < sample_size:
-            if config.segmentation_guided:
-                current_batch_size = [v for k, v in seg_batch.items() if k.startswith("seg_")][0].shape[0]
-            else:
-                current_batch_size = config.eval_batch_size
+    while num_sampled < sample_size:
+        # Generate images conditioned on the master image
+        images = pipeline(
+            batch_size=min(config.eval_batch_size, sample_size - num_sampled),
+            master_image=master_images[:1].repeat(config.eval_batch_size, 1, 1, 1),  # Repeat the first master image
+        ).images
 
-            if config.segmentation_guided:
-                images = pipeline(
-                    batch_size = current_batch_size,
-                    seg_batch=seg_batch,
-                ).images
-            else:
-                images = pipeline(
-                    batch_size = current_batch_size,
-                ).images
+        # Save each image in the batch
+        for i, img in enumerate(images):
+            img_fname = f"{sample_dir}/{num_sampled + i:04d}.png"
+            img.save(img_fname)
 
-            # save each image in the list separately
-            for i, img in enumerate(images):
-                if config.segmentation_guided:
-                    # name base on input mask fname
-                    img_fname = "{}/condon_{}".format(sample_dir, seg_batch["image_filenames"][i])
-                else:
-                    img_fname = f"{sample_dir}/{num_sampled + i:04d}.png"
-                img.save(img_fname)
-
-            num_sampled += len(images)
-            print("sampled {}/{}.".format(num_sampled, sample_size))
+        num_sampled += len(images)
+        print(f"sampled {num_sampled}/{sample_size}")
 
 
 

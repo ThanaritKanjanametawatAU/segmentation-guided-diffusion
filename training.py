@@ -62,52 +62,43 @@ def save_model_checkpoint(config, epoch, pipeline, optimizer, lr_scheduler, scal
     """Helper function to save model checkpoint and training state"""
     
     # Create output directory if it doesn't exist
-    os.makedirs(config.output_dir, exist_ok=True)
-    os.makedirs(os.path.join(config.output_dir, "unet"), exist_ok=True)
+    checkpoint_dir = os.path.join(config.output_dir, "unets", f"checkpoint_{epoch}")
+    os.makedirs(checkpoint_dir, exist_ok=True)
     
-    # 1. Save the UNet model
-    pipeline.unet.save_pretrained(os.path.join(config.output_dir, "unet"))
+    # Save the model using pipeline's save_pretrained
+    pipeline.save_pretrained(checkpoint_dir)
     
-    # 2. Save training state
-    checkpoint = {
-        'epoch': epoch,
-        'optimizer_state_dict': optimizer.state_dict(),
-        'lr_scheduler_state_dict': lr_scheduler.state_dict(),
-    }
-    
-    # Add scaler state if using mixed precision
-    if scaler is not None:
-        checkpoint['scaler_state_dict'] = scaler.state_dict()
-        
-    # Save checkpoint
-    os.makedirs(os.path.join(config.output_dir, "checkpoints"), exist_ok=True)
-    checkpoint_path = os.path.join(config.output_dir, "checkpoints", f'checkpoint_{epoch}.safetensors')
-    torch.save(checkpoint, checkpoint_path)
-    
-    # 3. Save config
-    config_dict = {k: str(v) if not isinstance(v, (int, float, bool, str, type(None))) 
-                  else v for k, v in vars(config).items()}
-    config_path = os.path.join(config.output_dir, "unet", 'config.json')
+  
+    # Save Training Config
+    config_path = os.path.join(checkpoint_dir, 'training_config.json')
     with open(config_path, 'w') as f:
-        json.dump(config_dict, f, indent=4)
+        json.dump(config.__dict__, f, indent=4)
+
 
 def load_checkpoint(config, optimizer, lr_scheduler, scaler=None):
     """Helper function to load model checkpoint and training state"""
     
-    checkpoint_path = os.path.join(config.output_dir, f'checkpoint_{config.resume_epoch}.pt')
-    if not os.path.exists(checkpoint_path):
-        raise FileNotFoundError(f"No checkpoint found at {checkpoint_path}")
-        
-    checkpoint = torch.load(checkpoint_path)
+    checkpoint_dir = os.path.join(config.output_dir, 'unets', f'checkpoint_{config.resume_epoch}')
+    unet_path = os.path.join(checkpoint_dir, 'unet')
+    optimizer_path = os.path.join(checkpoint_dir, 'optimizer.pt')
+    training_state_path = os.path.join(checkpoint_dir, 'training_state.pt')
     
-    # Load training state
-    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-    lr_scheduler.load_state_dict(checkpoint['lr_scheduler_state_dict'])
-    
-    if scaler is not None and 'scaler_state_dict' in checkpoint:
-        scaler.load_state_dict(checkpoint['scaler_state_dict'])
+    if not os.path.exists(unet_path):
+        raise FileNotFoundError(f"No checkpoint found at {unet_path}")
         
-    return checkpoint['epoch']
+    # Load optimizer and training state if they exist
+    if os.path.exists(training_state_path):
+        training_state = torch.load(training_state_path)
+        optimizer.load_state_dict(training_state['optimizer_state_dict'])
+        lr_scheduler.load_state_dict(training_state['lr_scheduler_state_dict'])
+        
+        if scaler is not None and 'scaler_state_dict' in training_state:
+            scaler.load_state_dict(training_state['scaler_state_dict'])
+            
+        return training_state['epoch']
+    
+    # If no training state found, just return the resume epoch
+    return config.resume_epoch
 
 def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, eval_dataloader, lr_scheduler, device='cuda',):
     global_step = 0
@@ -132,7 +123,7 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, eval
         start_epoch = 1
 
     for epoch in range(start_epoch, config.num_epochs+1):
-        print("training at epoch {}".format(epoch) + "\n")
+        print("training at epoch {} / {}".format(epoch, config.num_epochs) + "\n")
         model.train()
         progress_bar = tqdm(total=len(train_dataloader))
         progress_bar.set_description(f"Epoch {epoch}")

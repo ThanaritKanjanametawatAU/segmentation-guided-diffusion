@@ -40,6 +40,7 @@ def main(
     eval_shuffle_dataloader=True,
     save_image_epochs=20,
     save_model_epochs=30,
+    checkpoint=None,
 
     # arguments only used in eval
     eval_mask_removal=False,
@@ -305,8 +306,11 @@ def main(
             # Load HuggingFace dataset
             ds = load_dataset(dataset)
             dataset_train = ds["train"]
+
+            test_example = dataset_train.select([9999, 10000])
+            test_example.set_transform(transform)
             
-            # Select only first 100 examples for training
+            # Select only first 1000 examples for training
             dataset_train = dataset_train.select(range(1000))
             
             # Cast image columns 
@@ -327,6 +331,13 @@ def main(
             specific_example = dataset_train.select([0])  # Select first example
             eval_dataloader = torch.utils.data.DataLoader(
                 specific_example,
+                batch_size=1,  # Keep batch size 1 since we're using one example 
+                shuffle=False  # Don't shuffle to get same example each time
+            )
+
+            
+            test_dataloader = torch.utils.data.DataLoader(
+                test_example,
                 batch_size=1,  # Keep batch size 1 since we're using one example 
                 shuffle=False  # Don't shuffle to get same example each time
             )
@@ -368,10 +379,17 @@ def main(
     if (mode == "train" and resume_epoch is not None) or "eval" in mode:
         if mode == "train":
             print("resuming from model at training epoch {}".format(resume_epoch))
+            checkpoint_dir = os.path.join(config.output_dir, 'unets', f'checkpoint_{resume_epoch}', 'unet')
         elif "eval" in mode:
-            print("loading saved model...")
-        print("Dir: " + os.path.join(config.output_dir))
-        model = model.from_pretrained(os.path.join(config.output_dir, 'unet'), use_safetensors=True)
+            if checkpoint is not None:
+                print(f"loading saved model from checkpoint {checkpoint}...")
+                checkpoint_dir = os.path.join(config.output_dir, 'unets', f'checkpoint_{checkpoint}', 'unet')
+            else:
+                print("loading latest saved model...")
+                checkpoint_dir = os.path.join(config.output_dir, 'unet')
+                
+        print("Loading from: " + checkpoint_dir)
+        model = model.from_pretrained(checkpoint_dir, use_safetensors=True)
 
     model = nn.DataParallel(model)
     model.to(device)
@@ -415,7 +433,7 @@ def main(
             config, 
             model, 
             noise_scheduler,
-            eval_dataloader, 
+            test_dataloader, 
             eval_mask_removal=eval_mask_removal,
             eval_blank_mask=eval_blank_mask,
             device=device
@@ -430,7 +448,7 @@ def main(
             config,
             model,
             noise_scheduler,
-            eval_dataloader,
+            test_dataloader, 
             device=device
             )
 
@@ -455,7 +473,7 @@ if __name__ == "__main__":
     parser.add_argument('--eval_batch_size', type=int, default=8)
     parser.add_argument('--num_epochs', type=int, default=200)
     parser.add_argument('--resume_epoch', type=int, default=None, help='resume training starting at this epoch')
-
+    parser.add_argument('--checkpoint', type=int, default=None, help='specific checkpoint number to load for evaluation')
     # novel options
     parser.add_argument('--use_ablated_segmentations', action='store_true', help='use mask ablated training and any evaluation? sometimes randomly remove class(es) from mask during training and sampling.')
 
@@ -491,6 +509,7 @@ if __name__ == "__main__":
         not args.eval_noshuffle_dataloader,
         args.save_image_epochs,
         args.save_model_epochs, 
+        args.checkpoint,
 
         # args only used in eval
         args.eval_mask_removal,
