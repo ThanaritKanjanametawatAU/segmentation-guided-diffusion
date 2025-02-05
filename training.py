@@ -103,7 +103,7 @@ def load_checkpoint(config, optimizer, lr_scheduler, scaler=None):
 def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, eval_dataloader, lr_scheduler, device='cuda',):
     global_step = 0
     
-    # Initialize gradient scaler for mixed precision training
+    # for mixed precision training
     scaler = torch.cuda.amp.GradScaler(enabled=config.mixed_precision == 'fp16')
     
     # Logging setup
@@ -116,12 +116,15 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, eval
     eval_dataloader_original = eval_dataloader
     eval_iter = iter(eval_dataloader)
 
+
     # Load checkpoint if resuming training
     if config.resume_epoch is not None:
         start_epoch = load_checkpoint(config, optimizer, lr_scheduler, scaler) + 1
     else:
         start_epoch = 1
 
+
+    # Training Loop 
     for epoch in range(start_epoch, config.num_epochs+1):
         print("training at epoch {} / {}".format(epoch, config.num_epochs) + "\n")
         model.train()
@@ -129,19 +132,24 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, eval
         progress_bar.set_description(f"Epoch {epoch}")
         
         total_loss = 0
-        optimizer.zero_grad(set_to_none=True)  # More efficient than zero_grad()
+        optimizer.zero_grad(set_to_none=True)  
 
+
+
+        # Each Steps
         for step, batch in enumerate(train_dataloader):
-            # Move data to device
             master_images = batch['master_images'].to(device, non_blocking=True)
             defect_images = batch['defect_images'].to(device, non_blocking=True)
             
-            # Calculate valid mask
-            valid_mask = (defect_images != master_images).float()
+            # Calculate the difference mask
+            difference_mask = (defect_images != master_images).float()
             
+
             # Sample noise and timesteps
             noise = torch.randn_like(defect_images, device=device)
             bs = defect_images.shape[0]
+
+            # Default Max timesteps: 1000
             timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (bs,), device=device)
 
             # Mixed precision training
@@ -149,14 +157,15 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, eval
                 # Add noise to defect images
                 noisy_defects = noise_scheduler.add_noise(defect_images, noise, timesteps)
                 
-                # Prepare model input
+                # Prepare model input (6 channels: 3 for noisy defects, 3 for master images)
                 model_input = torch.cat([noisy_defects, master_images], dim=1)
+                
                 
                 # Get model prediction
                 noise_pred = model(model_input, timesteps, return_dict=False)[0]
                 
                 # Calculate loss
-                loss = F.mse_loss(noise_pred * valid_mask, noise * valid_mask)
+                loss = F.mse_loss(noise_pred * difference_mask, noise * difference_mask)
                 loss = loss / config.gradient_accumulation_steps
 
             # Backward pass with gradient scaling
@@ -187,6 +196,10 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, eval
 
             progress_bar.update(1)
 
+
+
+
+
         # Evaluation and checkpointing
         if epoch % config.save_image_epochs == 0 or epoch == config.num_epochs:
             print("evaluating at epoch {}".format(epoch) + "\n")
@@ -214,6 +227,9 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, eval
             avg_loss = total_loss / len(train_dataloader)
             writer.add_scalar("train/epoch_loss", avg_loss, epoch)
 
+
+
+
         # Save checkpoints
         if epoch % config.save_model_epochs == 0 or epoch == config.num_epochs:
             print("saving model checkpoint at epoch {}".format(epoch) + "\n")
@@ -226,12 +242,5 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, eval
                 scaler=scaler if config.mixed_precision == 'fp16' else None
             )
             
-            # Also save config separately for easy access
-            # config_path = os.path.join(config.output_dir, 'config.json')
-            # with open(config_path, 'w') as f:
-            #     # Convert dataclass to dictionary
-            #     config_dict = {k: str(v) if not isinstance(v, (int, float, bool, str, type(None))) 
-            #                  else v for k, v in config.__dict__.items()}
-            #     json.dump(config_dict, f, indent=4)
 
     writer.close()

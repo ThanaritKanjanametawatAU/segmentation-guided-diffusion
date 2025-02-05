@@ -4,10 +4,11 @@ import torchvision.transforms as transforms
 
 def make_grid(images, rows, cols):
     if isinstance(images[0], torch.Tensor):
-        # Handle torch tensors
-        # Denormalize if needed
+
         images = [(img.cpu() * 0.5 + 0.5).clamp(0, 1) for img in images]
-        # Convert to PIL images
+
+
+
         to_pil = transforms.ToPILImage()
         images = [to_pil(img) for img in images]
     

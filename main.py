@@ -48,30 +48,28 @@ def main(
     eval_sample_size=1000
 ):
     
-
+    """Part 1: Setting up the environment"""
 
     #GPUs
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print('running on {}'.format(device))
 
 
-
-
     # load config
     dataset_formatted = dataset.replace('/', '_')
     output_dir = '{}-{}-{}'.format(model_type.lower(), dataset_formatted, img_size)  # the model namy locally and on the HF Hub
-    if segmentation_guided:
-        output_dir += "-segguided"
-        assert seg_dir is not None, "must provide segmentation directory for segmentation guided training/sampling"
+    # if segmentation_guided:
+    #     output_dir += "-segguided"
+    #     assert seg_dir is not None, "must provide segmentation directory for segmentation guided training/sampling"
 
-    if use_ablated_segmentations or eval_mask_removal or eval_blank_mask:
-        output_dir += "-ablated"
+    # if use_ablated_segmentations or eval_mask_removal or eval_blank_mask:
+    #     output_dir += "-ablated"
 
     print("output dir: {}".format(output_dir))
 
     if mode == "train":
         evalset_name = "val"
-        # Modify this check to allow HF datasets
+        # TODO: Modify this check to allow other HF datasets
         if dataset.startswith("Thanarit/") or dataset.startswith("huggingface/"):
             # Using Hugging Face dataset
             pass
@@ -106,73 +104,78 @@ def main(
         print("image channels not 1 or 3, attempting to load images as np arrays...")
 
     if config.segmentation_guided:
-        seg_types = os.listdir(seg_dir)
-        seg_paths_train = {} 
-        seg_paths_eval = {}
+        pass
+        # seg_types = os.listdir(seg_dir)
+        # seg_paths_train = {} 
+        # seg_paths_eval = {}
 
-        # train set
-        if img_dir is not None: 
-            # make sure the images are matched to the segmentation masks
-            img_dir_train = os.path.join(img_dir, "train")
-            img_paths_train = [os.path.join(img_dir_train, f) for f in os.listdir(img_dir_train)]
-            for seg_type in seg_types:
-                seg_paths_train[seg_type] = [os.path.join(seg_dir, seg_type, "train", f) for f in os.listdir(img_dir_train)]
-        else:
-            for seg_type in seg_types:
-                seg_paths_train[seg_type] = [os.path.join(seg_dir, seg_type, "train", f) for f in os.listdir(os.path.join(seg_dir, seg_type, "train"))]
+        # # train set
+        # if img_dir is not None: 
+        #     # make sure the images are matched to the segmentation masks
+        #     img_dir_train = os.path.join(img_dir, "train")
+        #     img_paths_train = [os.path.join(img_dir_train, f) for f in os.listdir(img_dir_train)]
+        #     for seg_type in seg_types:
+        #         seg_paths_train[seg_type] = [os.path.join(seg_dir, seg_type, "train", f) for f in os.listdir(img_dir_train)]
+        # else:
+        #     for seg_type in seg_types:
+        #         seg_paths_train[seg_type] = [os.path.join(seg_dir, seg_type, "train", f) for f in os.listdir(os.path.join(seg_dir, seg_type, "train"))]
 
-        # eval set
-        if img_dir is not None: 
-            img_dir_eval = os.path.join(img_dir, evalset_name)
-            img_paths_eval = [os.path.join(img_dir_eval, f) for f in os.listdir(img_dir_eval)]
-            for seg_type in seg_types:
-                seg_paths_eval[seg_type] = [os.path.join(seg_dir, seg_type, evalset_name, f) for f in os.listdir(img_dir_eval)]
-        else:
-            for seg_type in seg_types:
-                seg_paths_eval[seg_type] = [os.path.join(seg_dir, seg_type, evalset_name, f) for f in os.listdir(os.path.join(seg_dir, seg_type, evalset_name))]
+        # # eval set
+        # if img_dir is not None: 
+        #     img_dir_eval = os.path.join(img_dir, evalset_name)
+        #     img_paths_eval = [os.path.join(img_dir_eval, f) for f in os.listdir(img_dir_eval)]
+        #     for seg_type in seg_types:
+        #         seg_paths_eval[seg_type] = [os.path.join(seg_dir, seg_type, evalset_name, f) for f in os.listdir(img_dir_eval)]
+        # else:
+        #     for seg_type in seg_types:
+        #         seg_paths_eval[seg_type] = [os.path.join(seg_dir, seg_type, evalset_name, f) for f in os.listdir(os.path.join(seg_dir, seg_type, evalset_name))]
 
-        if img_dir is not None:
-            dset_dict_train = {
-                    **{"image": img_paths_train},
-                    **{"seg_{}".format(seg_type): seg_paths_train[seg_type] for seg_type in seg_types}
-                }
+        # if img_dir is not None:
+        #     dset_dict_train = {
+        #             **{"image": img_paths_train},
+        #             **{"seg_{}".format(seg_type): seg_paths_train[seg_type] for seg_type in seg_types}
+        #         }
             
-            dset_dict_eval = {
-                    **{"image": img_paths_eval},
-                    **{"seg_{}".format(seg_type): seg_paths_eval[seg_type] for seg_type in seg_types}
-            }
-        else:
-            dset_dict_train = {
-                    **{"seg_{}".format(seg_type): seg_paths_train[seg_type] for seg_type in seg_types}
-                }
+        #     dset_dict_eval = {
+        #             **{"image": img_paths_eval},
+        #             **{"seg_{}".format(seg_type): seg_paths_eval[seg_type] for seg_type in seg_types}
+        #     }
+        # else:
+        #     dset_dict_train = {
+        #             **{"seg_{}".format(seg_type): seg_paths_train[seg_type] for seg_type in seg_types}
+        #         }
             
-            dset_dict_eval = {
-                    **{"seg_{}".format(seg_type): seg_paths_eval[seg_type] for seg_type in seg_types}
-            }
+        #     dset_dict_eval = {
+        #             **{"seg_{}".format(seg_type): seg_paths_eval[seg_type] for seg_type in seg_types}
+        #     }
 
 
-        if img_dir is not None:
-            # add image filenames to dataset
-            dset_dict_train["image_filename"] = [os.path.basename(f) for f in dset_dict_train["image"]]
-            dset_dict_eval["image_filename"] = [os.path.basename(f) for f in dset_dict_eval["image"]]
-        else:
-            # use segmentation filenames as image filenames
-            dset_dict_train["image_filename"] = [os.path.basename(f) for f in dset_dict_train["seg_{}".format(seg_types[0])]]
-            dset_dict_eval["image_filename"] = [os.path.basename(f) for f in dset_dict_eval["seg_{}".format(seg_types[0])]]
+        # if img_dir is not None:
+        #     # add image filenames to dataset
+        #     dset_dict_train["image_filename"] = [os.path.basename(f) for f in dset_dict_train["image"]]
+        #     dset_dict_eval["image_filename"] = [os.path.basename(f) for f in dset_dict_eval["image"]]
+        # else:
+        #     # use segmentation filenames as image filenames
+        #     dset_dict_train["image_filename"] = [os.path.basename(f) for f in dset_dict_train["seg_{}".format(seg_types[0])]]
+        #     dset_dict_eval["image_filename"] = [os.path.basename(f) for f in dset_dict_eval["seg_{}".format(seg_types[0])]]
 
-        dataset_train = datasets.Dataset.from_dict(dset_dict_train)
-        dataset_eval = datasets.Dataset.from_dict(dset_dict_eval)
+        # dataset_train = datasets.Dataset.from_dict(dset_dict_train)
+        # dataset_eval = datasets.Dataset.from_dict(dset_dict_eval)
 
-        # load the images
-        if not load_images_as_np_arrays and img_dir is not None:
-            dataset_train = dataset_train.cast_column("image", datasets.Image())
-            dataset_eval = dataset_eval.cast_column("image", datasets.Image())
+        # # load the images
+        # if not load_images_as_np_arrays and img_dir is not None:
+        #     dataset_train = dataset_train.cast_column("image", datasets.Image())
+        #     dataset_eval = dataset_eval.cast_column("image", datasets.Image())
 
-        for seg_type in seg_types:
-            dataset_train = dataset_train.cast_column("seg_{}".format(seg_type), datasets.Image())
+        # for seg_type in seg_types:
+        #     dataset_train = dataset_train.cast_column("seg_{}".format(seg_type), datasets.Image())
 
-        for seg_type in seg_types:
-            dataset_eval = dataset_eval.cast_column("seg_{}".format(seg_type), datasets.Image())
+        # for seg_type in seg_types:
+        #     dataset_eval = dataset_eval.cast_column("seg_{}".format(seg_type), datasets.Image())
+
+
+
+
 
     else:
         if img_dir is not None:
@@ -201,6 +204,9 @@ def main(
             if not load_images_as_np_arrays:
                 dataset_train = dataset_train.cast_column("image", datasets.Image())
                 dataset_eval = dataset_eval.cast_column("image", datasets.Image())
+
+
+
 
     # training set preprocessing
     if not load_images_as_np_arrays:
@@ -231,38 +237,49 @@ def main(
     else:
         PIL_image_type = None
 
+
+
+
     if config.segmentation_guided:
-        preprocess_segmentation = transforms.Compose(
-        [
-            transforms.Resize((config.image_size, config.image_size), interpolation=transforms.InterpolationMode.NEAREST),
-            transforms.ToTensor(),
-        ]
-        )
+        pass
+        # preprocess_segmentation = transforms.Compose(
+        # [
+        #     transforms.Resize((config.image_size, config.image_size), interpolation=transforms.InterpolationMode.NEAREST),
+        #     transforms.ToTensor(),
+        # ]
+        # )
 
-        def transform(examples):
-            if img_dir is not None:
-                if not load_images_as_np_arrays:
-                    images = [preprocess(image.convert(PIL_image_type)) for image in examples["image"]]
-                else:
-                    # load np array as torch tensor, resize, then normalize
-                    images = [
-                        preprocess(F.interpolate(torch.tensor(np.load(image)).unsqueeze(0).float(), size=(config.image_size, config.image_size)).squeeze()) for image in examples["image"]
-                        ]
+        # def transform(examples):
+        #     if img_dir is not None:
+        #         if not load_images_as_np_arrays:
+        #             images = [preprocess(image.convert(PIL_image_type)) for image in examples["image"]]
+        #         else:
+        #             # load np array as torch tensor, resize, then normalize
+        #             images = [
+        #                 preprocess(F.interpolate(torch.tensor(np.load(image)).unsqueeze(0).float(), size=(config.image_size, config.image_size)).squeeze()) for image in examples["image"]
+        #                 ]
 
-            images_filenames = examples["image_filename"]
+        #     images_filenames = examples["image_filename"]
 
-            segs = {}
-            for seg_type in seg_types:
-                segs["seg_{}".format(seg_type)] = [preprocess_segmentation(image.convert("L")) for image in examples["seg_{}".format(seg_type)]]
-            # return {"images": images, "seg_breast": seg_breast, "seg_dv": seg_dv}
-            if img_dir is not None:
-                return {**{"images": images}, **segs, **{"image_filenames": images_filenames}}
-            else:
-                return {**segs, **{"image_filenames": images_filenames}}
+        #     segs = {}
+        #     for seg_type in seg_types:
+        #         segs["seg_{}".format(seg_type)] = [preprocess_segmentation(image.convert("L")) for image in examples["seg_{}".format(seg_type)]]
+        #     # return {"images": images, "seg_breast": seg_breast, "seg_dv": seg_dv}
+        #     if img_dir is not None:
+        #         return {**{"images": images}, **segs, **{"image_filenames": images_filenames}}
+        #     else:
+        #         return {**segs, **{"image_filenames": images_filenames}}
             
-        dataset_train.set_transform(transform)
-        dataset_eval.set_transform(transform)
+        # dataset_train.set_transform(transform)
+        # dataset_eval.set_transform(transform)
 
+
+
+
+
+
+
+    """Part 2: Loading the dataset"""
     else:
         if img_dir is not None:
             pass
@@ -271,17 +288,22 @@ def main(
             # Preprocessing for both master and defect images
             preprocess = transforms.Compose(
                 [
-            transforms.Resize((config.image_size, config.image_size)),
-            transforms.ToTensor(),
-            transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]),
-        ]
-    )
+                    transforms.Resize((config.image_size, config.image_size)),
+                    # Automatically convert from [0, 255] to [0, 1]
+                    transforms.ToTensor(),
+                    # Normalize all 3 channels so the range of pixel values: from [0, 1] becomes [-1, 1]
+                    # Turn back by image with image = (image / 2 + 0.5).clamp(0, 1)  # Convert [-1,1] back to [0,1]
+                    # See DDPM Paper, Section 3.3
+                    transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]),
+                ]
+            )
 
             if not load_images_as_np_arrays:
                 # Load both master (normal) and defect PCB images
                 master_images = [preprocess(image.convert("RGB")) for image in examples["master_image"]]
                 defect_images = [preprocess(image.convert("RGB")) for image in examples["defect_image"]]
             else:
+                # In case the image is in np array format
                 master_images = [
                     preprocess(F.interpolate(torch.tensor(image).unsqueeze(0).float(), 
                     size=(config.image_size, config.image_size)).squeeze()) 
@@ -292,74 +314,85 @@ def main(
                     size=(config.image_size, config.image_size)).squeeze())
                     for image in examples["defect_image"]
                 ]
+
+
     
-            # Add filenames for tracking
+
             images_filenames = examples["pair_id"]
-    
             return {
                 "master_images": master_images,
                 "defect_images": defect_images,
                 "image_filenames": images_filenames
             }
 
+        # TODO: Modify this check to allow other HF datasets and properly split train/test/val and use v2
         if dataset.startswith("Thanarit/"):
             # Load HuggingFace dataset
             ds = load_dataset(dataset)
             dataset_train = ds["train"]
 
+            # Select an eval_many mode's test example (10000th example)
             test_example = dataset_train.select([9999])
             test_example.set_transform(transform)
             
+
             # Select only first 1000 examples for training
-            dataset_train = dataset_train.select(range(1000))
-            
-            # Cast image columns 
+            dataset_train = dataset_train.select(range(1000))           
             dataset_train = dataset_train.cast_column("master_image", datasets.Image())
             dataset_train = dataset_train.cast_column("defect_image", datasets.Image())
-            
-            # Set transform
             dataset_train.set_transform(transform)
             
+            # For eval along the training process (1st example)
+            specific_example = dataset_train.select([0]) 
+            
+
             # Create training dataloader
             train_dataloader = torch.utils.data.DataLoader(
                 dataset_train, 
                 batch_size=config.train_batch_size,
                 shuffle=True
-            )
+            )           
+
             
-            # For eval/testing, use just one specific example
-            specific_example = dataset_train.select([0])  # Select first example
             eval_dataloader = torch.utils.data.DataLoader(
                 specific_example,
-                batch_size=1,  # Keep batch size 1 since we're using one example 
-                shuffle=False  # Don't shuffle to get same example each time
+                batch_size=1, 
+                shuffle=False  
             )
 
             
             test_dataloader = torch.utils.data.DataLoader(
                 test_example,
-                batch_size=1,  # Keep batch size 1 since we're using one example 
-                shuffle=False  # Don't shuffle to get same example each time
+                batch_size=1,  
+                shuffle=False  
             )
 
         print(f"Number of training samples: {len(dataset_train)}")
         print(f"Number of test samples: {len(test_dataloader)}")
         print(f"Number of validation samples: {len(eval_dataloader)}")
 
-    # define the model
+
+
     in_channels = num_img_channels
-    if config.segmentation_guided:
-        assert config.num_segmentation_classes is not None
-        assert config.num_segmentation_classes > 1, "must have at least 2 segmentation classes (INCLUDING background)" 
-        if config.segmentation_channel_mode == "single":
-            in_channels += 1
-        elif config.segmentation_channel_mode == "multi":
-            in_channels = len(seg_types) + in_channels
+    # if config.segmentation_guided:
+    #     assert config.num_segmentation_classes is not None
+    #     assert config.num_segmentation_classes > 1, "must have at least 2 segmentation classes (INCLUDING background)" 
+    #     if config.segmentation_channel_mode == "single":
+    #         in_channels += 1
+    #     elif config.segmentation_channel_mode == "multi":
+    #         in_channels = len(seg_types) + in_channels
+
+
+    # Main Part of the Code
+
+
+
+    """Part 3: Defining the model"""
 
     model = diffusers.UNet2DModel(
         sample_size=config.image_size,
-        in_channels=num_img_channels * 2,  # Double channels for concatenated input
-        out_channels=num_img_channels,
+        in_channels=num_img_channels * 2,  # 6 Channels for concatenated master and defect images
+        out_channels=num_img_channels,     # 3 Channels for predicted defect images
         layers_per_block=2,
         block_out_channels=(128, 128, 256, 256, 512, 512),
         down_block_types=( 
@@ -377,9 +410,11 @@ def main(
             "UpBlock2D",
             "UpBlock2D",
             "UpBlock2D"
-    ),
-)
+        ),
+    )
 
+    # TODO: Clean up this section
+    # Made it Possible to Resume Training or Load a Checkpoint for Test set Evaluation
     if (mode == "train" and resume_epoch is not None) or "eval" in mode:
         if mode == "train":
             print("resuming from model at training epoch {}".format(resume_epoch))
@@ -395,15 +430,26 @@ def main(
         print("Loading from: " + checkpoint_dir)
         model = model.from_pretrained(checkpoint_dir, use_safetensors=True)
 
+
+    # To Support Multi-GPU Training
     model = nn.DataParallel(model)
     model.to(device)
 
-    # define noise scheduler
+    
+    
+    
+    
+    
+    """Part 4: Training and Evaluation Setup"""
+
+    # Define the Noise Scheduler
     if model_type == "DDPM":
         noise_scheduler = diffusers.DDPMScheduler(num_train_timesteps=1000)
     elif model_type == "DDIM":
         noise_scheduler = diffusers.DDIMScheduler(num_train_timesteps=1000)
 
+
+    # Training Setup
     if mode == "train":
         # training setup
         optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate)
@@ -424,25 +470,29 @@ def main(
             lr_scheduler, 
             device=device
             )
+
+
     elif mode == "eval":
-        """
-        default eval behavior:
-        evaluate image generation or translation (if for conditional model, either evaluate naive class conditioning but not CFG,
-        or with CFG),
-        possibly conditioned on masks.
+        pass
+        # """
+        # default eval behavior:
+        # evaluate image generation or translation (if for conditional model, either evaluate naive class conditioning but not CFG,
+        # or with CFG),
+        # possibly conditioned on masks.
 
-        has various options.
-        """
-        evaluate_generation(
-            config, 
-            model, 
-            noise_scheduler,
-            test_dataloader, 
-            eval_mask_removal=eval_mask_removal,
-            eval_blank_mask=eval_blank_mask,
-            device=device
-            )
+        # has various options.
+        # """
+        # evaluate_generation(
+        #     config, 
+        #     model, 
+        #     noise_scheduler,
+        #     test_dataloader, 
+        #     eval_mask_removal=eval_mask_removal,
+        #     eval_blank_mask=eval_blank_mask,
+        #     device=device
+        #     )
 
+    # Evaluation Setup (eval_many)
     elif mode == "eval_many":
         """
         generate many images and save them to a directory, saved individually
@@ -455,6 +505,9 @@ def main(
             test_dataloader, 
             device=device
             )
+
+
+
 
     else:
         raise ValueError("mode \"{}\" not supported.".format(mode))
