@@ -332,7 +332,7 @@ def main(
             dataset_train = ds["train"]
 
             # Select an eval_many mode's test example (10000th example)
-            test_example = dataset_train.select([-1])
+            test_example = dataset_train.select([1])
             test_example.set_transform(transform)
             
 
