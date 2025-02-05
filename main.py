@@ -279,7 +279,7 @@ def main(
 
 
 
-    """Part 2: Loading the dataset"""
+    # Part 2: Loading the dataset
     else:
         if img_dir is not None:
             pass
