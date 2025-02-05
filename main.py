@@ -332,12 +332,12 @@ def main(
             dataset_train = ds["train"]
 
             # Select an eval_many mode's test example (10000th example)
-            test_example = dataset_train.select([9999])
+            test_example = dataset_train.select([-1])
             test_example.set_transform(transform)
             
 
             # Select only first 1000 examples for training
-            dataset_train = dataset_train.select(range(1000))           
+            # dataset_train = dataset_train.select(range(1000))           
             dataset_train = dataset_train.cast_column("master_image", datasets.Image())
             dataset_train = dataset_train.cast_column("defect_image", datasets.Image())
             dataset_train.set_transform(transform)

@@ -4,7 +4,7 @@ python main.py \
     --model_type DDIM \
     --img_size 512 \
     --num_img_channels 3 \
-    --dataset Thanarit/PCB \
+    --dataset Thanarit/PCB-v2 \
     --train_batch_size 2 \
     --eval_batch_size 1 \
     --num_epochs 1000 \
