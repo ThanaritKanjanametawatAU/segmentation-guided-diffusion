@@ -141,6 +141,7 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, eval
             master_images = batch['master_images'].to(device, non_blocking=True)
             defect_images = batch['defect_images'].to(device, non_blocking=True)
             
+            
             # Calculate the difference mask
             difference_mask = (defect_images != master_images).float()
             

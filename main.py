@@ -208,18 +208,18 @@ def main(
 
 
 
-    # training set preprocessing
+    # Does not count, since PCB dataset has 3 channels
     if not load_images_as_np_arrays:
         preprocess = transforms.Compose(
             [
                 transforms.Resize((config.image_size, config.image_size)),
-                # transforms.RandomHorizontalFlip(), # flipping wouldn't result in realistic images
                 transforms.ToTensor(),
                 transforms.Normalize(
                     num_img_channels * [0.5], 
                     num_img_channels * [0.5]),
             ]
         )
+
     else:
         # resizing will be done in the transform function
         preprocess = transforms.Compose(
@@ -302,7 +302,11 @@ def main(
                 # Load both master (normal) and defect PCB images
                 master_images = [preprocess(image.convert("RGB")) for image in examples["master_image"]]
                 defect_images = [preprocess(image.convert("RGB")) for image in examples["defect_image"]]
+            
+            
             else:
+                # Does not count, since PCB dataset has 3 channels
+                
                 # In case the image is in np array format
                 master_images = [
                     preprocess(F.interpolate(torch.tensor(image).unsqueeze(0).float(), 
@@ -332,12 +336,12 @@ def main(
             dataset_train = ds["train"]
 
             # Select an eval_many mode's test example (10000th example)
-            test_example = dataset_train.select([1])
-            test_example.set_transform(transform)
+            dataset_test = ds["test"]
+            dataset_test.set_transform(transform)
             
 
             # Select only first 1000 examples for training
-            # dataset_train = dataset_train.select(range(1000))           
+            dataset_train = dataset_train.select(range(1000))           
             dataset_train = dataset_train.cast_column("master_image", datasets.Image())
             dataset_train = dataset_train.cast_column("defect_image", datasets.Image())
             dataset_train.set_transform(transform)
@@ -356,18 +360,18 @@ def main(
             
             eval_dataloader = torch.utils.data.DataLoader(
                 specific_example,
-                batch_size=1, 
+                batch_size=config.eval_batch_size, 
                 shuffle=False  
             )
 
             
             test_dataloader = torch.utils.data.DataLoader(
-                test_example,
-                batch_size=1,  
+                dataset_test,
+                batch_size=config.eval_batch_size,  
                 shuffle=False  
             )
 
-        print(f"Number of training samples: {len(dataset_train)}")
+        print(f"Number of training samples: {len(train_dataloader)}")
         print(f"Number of test samples: {len(test_dataloader)}")
         print(f"Number of validation samples: {len(eval_dataloader)}")
 
