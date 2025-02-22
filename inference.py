@@ -5,6 +5,8 @@ from diffusers import UNet2DModel, DiffusionPipeline, ImagePipelineOutput
 import os
 from typing import Optional, Tuple, Union
 
+
+
 # Add these functions at the top of the file
 def load_image(image_path, target_size=128):
     """Load and preprocess an image from a given path"""
@@ -195,3 +197,7 @@ generated_image = simple_inference(
     target_size=128,
     device='cuda'  
 )
+
+from datasets import load_dataset
+dataset = load_dataset("Thanarit/PCB-v2", split="test")
+

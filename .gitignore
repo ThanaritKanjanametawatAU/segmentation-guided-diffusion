@@ -23,3 +23,8 @@ samples_many_*
 # Runtime
 ddim-*
 runs
+*gradio*
+labeling_progress
+example_images
+*output*
+*model*
