@@ -1,0 +1,43 @@
+.gradio-container {
+    font-family: 'Inter', sans-serif;
+}
+
+.examples-table {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 10px;
+    margin: 20px 0;
+}
+
+.example-image {
+    width: 100%;
+    height: 150px;
+    object-fit: cover;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: transform 0.2s;
+}
+
+.example-image:hover {
+    transform: scale(1.05);
+}
+
+.input-column, .output-column {
+    background: #f7f7f7;
+    padding: 20px;
+    border-radius: 10px;
+}
+
+button.primary {
+    background: #2196F3;
+    border: none;
+    color: white;
+    padding: 10px 20px;
+    border-radius: 5px;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+button.primary:hover {
+    background: #1976D2;
+}
