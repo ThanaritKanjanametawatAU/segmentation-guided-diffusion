@@ -24,8 +24,8 @@ class PCBLatentInpaintingInference:
             torch_dtype=torch.float16
         ).to(self.device)
         
-        self.text_encoder = transformers.BertModel.from_pretrained(
-            "bert-base-uncased",
+        self.text_encoder = transformers.CLIPTextModel.from_pretrained(
+            "openai/clip-vit-base-patch32",
             torch_dtype=torch.float16
         ).to(self.device)
         
@@ -36,7 +36,7 @@ class PCBLatentInpaintingInference:
         ).to(self.device)
 
         # Initialize tokenizer
-        self.tokenizer = transformers.BertTokenizer.from_pretrained("bert-base-uncased")
+        self.tokenizer = transformers.CLIPTokenizer.from_pretrained("openai/clip-vit-base-patch32")
         
         # Set models to eval mode
         self.vae.eval()

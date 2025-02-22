@@ -26,8 +26,13 @@ class PCBLatentInpainting:
         ).to(self.device)
         
         # Initialize text encoder
-        self.text_encoder = transformers.BertModel.from_pretrained(
-            "bert-base-uncased",
+        # self.text_encoder = transformers.BertModel.from_pretrained(
+        #     "bert-base-uncased",
+        #     torch_dtype=torch.float16
+        # ).to(self.device)
+
+        self.text_encoder = transformers.CLIPTextModel.from_pretrained(
+            "openai/clip-vit-base-patch32",
             torch_dtype=torch.float16
         ).to(self.device)
         
@@ -38,7 +43,7 @@ class PCBLatentInpainting:
         # Initialize UNet for latent space inpainting
         self.unet = UNet2DConditionModel(
             sample_size=args.latent_size,
-            in_channels=9,  # 4 for latent image + 4 for latent conditioning image + 1 for mask
+            in_channels=9,  # 4 for latent image (4*64*64) + 4 for latent conditioning image (4*64*64) + 1 for mask
             out_channels=4,
             layers_per_block=2,
             block_out_channels=(128, 256, 512, 512),
@@ -54,19 +59,21 @@ class PCBLatentInpainting:
                 "CrossAttnUpBlock2D",
                 "CrossAttnUpBlock2D",
             ),
-            cross_attention_dim=768,  # BERT hidden size
+            cross_attention_dim=512,
         ).to(self.device)
         
-        # Initialize scheduler
+        # DDPM scheduler
         self.noise_scheduler = DDPMScheduler(
             num_train_timesteps=1000,
             beta_schedule="linear"
         )
         
-        # Initialize tokenizer
-        self.tokenizer = transformers.BertTokenizer.from_pretrained("bert-base-uncased")
+        # Tokenizer
+        self.tokenizer = transformers.CLIPTokenizer.from_pretrained(
+            "openai/clip-vit-base-patch32"
+        )
         
-        # Initialize optimizer and gradient scaler for mixed precision
+        # Optimizer and gradient scaler for mixed precision
         self.optimizer = torch.optim.AdamW(
             self.unet.parameters(),
             lr=args.learning_rate,
@@ -74,10 +81,12 @@ class PCBLatentInpainting:
         )
         self.scaler = GradScaler()
 
+
     def encode_text(self, text_input):
         with torch.no_grad():
             text_output = self.text_encoder(**text_input)[0]
         return text_output
+
 
     def encode_images(self, images):
         with torch.no_grad():
@@ -85,7 +94,9 @@ class PCBLatentInpainting:
             latents = latents * self.vae.config.scaling_factor
         return latents
 
+
     def train_step(self, batch):
+        # Autocast for mixed precision
         with autocast(enabled=True):
             # Get text embeddings
             text_embeddings = self.encode_text({
@@ -176,7 +187,7 @@ class PCBLatentInpainting:
 
 def create_data_loader(args):
     """Load and preprocess the PCB dataset"""
-    tokenizer = transformers.BertTokenizer.from_pretrained("bert-base-uncased")
+    tokenizer = transformers.CLIPTokenizer.from_pretrained("openai/clip-vit-base-patch32")
     
     dataset = load_dataset(args.dataset)["train"]
     dataset = dataset.filter(lambda x: x["description"] != "nothing")

@@ -190,8 +190,6 @@ class PCBDefectGenerator:
     def tensor_to_pil(self, tensor):
         """Convert output tensor to PIL Image"""
         tensor = tensor.squeeze().cpu().detach()
-        # tensor = (tensor * 0.5) + 0.5  # Undo normalization
-        # tensor = tensor.clamp(0, 1)
         return transforms.ToPILImage()(tensor)
 
 def main():
