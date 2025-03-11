@@ -1,18 +1,19 @@
 Dataset Summary:
-Total number of examples: 86
-spurious copper: 21
-spur: 3
-scratch: 20
-mouse bite: 4
-pinhole: 1
-black scratch: 1
-brown scratch: 3
-green spurious copper: 1
-green scratch: 1
-green brown scratch: 1
-brown spurious copper: 1
-open track: 8
-contamination: 11
-spurious tin: 6
-missing hole: 1
-missing pad: 3
+Total number of examples: 205
+spurious tin: 27
+spur: 10
+scratch: 37
+mouse bite: 10
+spurious copper: 50
+open track: 19
+contamination: 52
+
+
+Main Types Pair Number: 
+spurious tin
+spur 
+scratch #76
+mouse bite #6
+spurious copper #92
+open track #89
+contamination #111
