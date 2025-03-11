@@ -7,11 +7,13 @@ import os
 from inpaintinference import PCBLatentInpaintingInference
 import torchvision.transforms as transforms
 from torchvision.utils import save_image
+from image_gen_aux import UpscaleWithModel
 
 class PCBDefectGenerator:
-    def __init__(self, model_path="working_model/checkpoint-1999-126images"):
+    def __init__(self, model_path="working_model/checkpoint-2999-126images-CLIP", upscaler_path="models/4xNomos8kDAT.pth"):
         self.model = PCBLatentInpaintingInference(model_path)
         self.dataset = load_dataset("Thanarit/PCB-v3")["train"]
+        self.upscaler = UpscaleWithModel.from_pretrained("Phips/4xNomosUniDAT2_multijpg_ldl_sharp").to("cuda")
         
         # Create examples directory if it doesn't exist
         self.examples_dir = "example_images"
@@ -22,9 +24,10 @@ class PCBDefectGenerator:
 
     def prepare_examples(self):
         examples = []
-        for idx in range(min(10, len(self.dataset))):
+        pairs = [92, 6, 89, 76, 111]
+        for idx in range(len(self.dataset)):
             example = self.dataset[idx]
-            if example["description"] != "nothing":
+            if int(example["pair_id"]) in pairs:
                 # Save image to file
                 img_path = os.path.join(self.examples_dir, f"example_{idx}.png")
                 example["master_image"].save(img_path)
@@ -33,65 +36,8 @@ class PCBDefectGenerator:
                     example["description"]  # Description
                 ])
         return examples
-
-    # def generate_defect_old(self, master_image, mask_image, prompt):
-    #     """
-    #     Generate defective PCB image based on mask and prompt
-    #     """
-    #     # Handle input from Gradio sketch tool
-    #     if isinstance(master_image, dict):
-    #         base_image = master_image["image"]
-    #         mask = master_image["mask"]
-    #     else:
-    #         base_image = master_image
-    #         mask = mask_image["mask"] if mask_image is not None else None
-
-    #     # Convert numpy array to PIL Image if needed
-    #     if isinstance(base_image, np.ndarray):
-    #         base_image = Image.fromarray(base_image)
-        
-    #     # Convert to RGB and transform exactly like inpaintinference.py
-    #     base_image = base_image.convert("RGB")
-    #     transform_image = transforms.Compose([
-    #         transforms.Resize((512, 512)),
-    #         transforms.ToTensor(),
-    #         transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5])
-    #     ])
-    #     master_tensor = transform_image(base_image).unsqueeze(0)
-
-    #     # Process mask
-    #     if mask is None:
-    #         mask = torch.zeros((1, 1, 512, 512), device=master_tensor.device)
-    #     else:
-    #         if isinstance(mask, np.ndarray):
-    #             mask = Image.fromarray(mask)
-    #         mask = mask.convert("L")  # Convert to grayscale
-    #         mask = transforms.Compose([
-    #             transforms.Resize((512, 512), interpolation=transforms.InterpolationMode.NEAREST),
-    #             transforms.ToTensor()
-    #         ])(mask)
-    #         mask = (mask > 0.5).float()  # Binary mask
-    #         if mask.ndim == 3 and mask.shape[0] == 3:
-    #             mask = mask[0].unsqueeze(0)
-    #         mask = mask.unsqueeze(0)
-
-    #     # Generate defective image
-    #     with torch.cuda.amp.autocast(enabled=True):
-    #         generated = self.model.generate(
-    #             prompt=prompt,
-    #             master_image=master_tensor,
-    #             mask=mask,
-    #             num_inference_steps=50
-    #         )[0]
-
-    #     # Post-process output
-    #     generated = (generated / 2 + 0.5).clamp(0, 1)
-    #     generated = (generated.cpu().permute(1, 2, 0).numpy() * 255).round().astype(np.uint8)
-    #     generated_image = Image.fromarray(generated)
-
-    #     return generated_image
     
-    def generate_defect(self, master_image, mask_image, prompt):
+    def generate_defect(self, master_image, mask_image, prompt, apply_upscale=True):
         # Handle Gradio sketch tool output format
         if isinstance(master_image, dict):
             base_image = master_image["image"]
@@ -124,13 +70,26 @@ class PCBDefectGenerator:
             prompt=prompt,
             master_image=master_image_transformed,
             mask=mask_transformed,
-            num_inference_steps=50
+            num_inference_steps=100
         )
-
+        
+        # Save the raw generated image
         save_image(generated_image, "generated_image.png")
-
-        return generated_image
+        
+        # Apply upscaling if requested
+        if apply_upscale:
+            # Convert tensor to PIL for upscaling
+            pil_image = self.tensor_to_pil(generated_image)
+            upscaled_image = self.upscale_image(pil_image)
+            # Save upscaled image
+            upscaled_image.save("upscaled_image.png")
+            return upscaled_image
+        
+        return self.tensor_to_pil(generated_image)
     
+    def upscale_image(self, image):
+        upscaled = self.upscaler(image, tiling=True, tile_width=1024, tile_height=1024)
+        return upscaled
 
     def create_interface(self):
         with gr.Blocks(css="""
@@ -159,6 +118,7 @@ class PCBDefectGenerator:
                         placeholder="Describe the defect you want to generate..."
                     )
                     
+                    apply_upscaling = gr.Checkbox(label="Apply 4x Upscaling", value=True)
                     generate_btn = gr.Button("Generate Defect", variant="primary")
 
                 with gr.Column():
@@ -176,12 +136,12 @@ class PCBDefectGenerator:
                 examples=examples,
                 inputs=[image_input, prompt_input],
                 label="Example PCB Images",
-                examples_per_page=5
+                examples_per_page=10
             )
 
             generate_btn.click(
-                fn=lambda *args: self.tensor_to_pil(self.generate_defect(*args)),
-                inputs=[image_input, gr.State(None), prompt_input],
+                fn=lambda img, prompt, upscale: self.generate_defect(img, None, prompt, upscale) if isinstance(img, dict) else self.tensor_to_pil(self.generate_defect(img, None, prompt, upscale)),
+                inputs=[image_input, prompt_input, apply_upscaling],
                 outputs=output_image
             )
 
