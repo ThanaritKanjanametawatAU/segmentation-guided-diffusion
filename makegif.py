@@ -100,5 +100,5 @@ if __name__ == "__main__":
     source_folder = "ddim-Thanarit_PCB-256/samples"
     output_base = "results/PCB-256/sample"
     
-    create_gif_and_mp4(source_folder, output_base, size=(256, 256), duration=300, loop=0)
+    create_gif_and_mp4(source_folder, output_base, size=(256, 256), duration=50, loop=0)
 
